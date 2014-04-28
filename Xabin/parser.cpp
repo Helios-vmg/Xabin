@@ -142,7 +142,7 @@ std::string DefinedInteger::generate_read_code(bool use_exceptions) const{
 		% this->get_negative_mapping_word()).str();
 }
 
-std::string DefinedDatum::generate_requirement_code(bool use_exceptions) const{
+std::string RequireCapableDatum::generate_requirement_code(bool use_exceptions) const{
 	if (!this->req.get())
 		return std::string();
 	const char *with_exceptions =
@@ -181,7 +181,7 @@ static struct{
 	{"s64", 1, 64},
 };
 
-DefinedInteger::DefinedInteger(tinyxml2::XMLElement *integer, const IntegerFormat &format, const IntegerType &type): DefinedDatum(DataType::INTEGER){
+DefinedInteger::DefinedInteger(tinyxml2::XMLElement *integer, const IntegerFormat &format, const IntegerType &type): RequireCapableDatum(DataType::INTEGER){
 	this->name = guaranteed_get_attribute(integer, "name");
 	this->format = format;
 	this->signedness = type.signedness;
@@ -193,7 +193,7 @@ DefinedInteger::DefinedInteger(tinyxml2::XMLElement *integer, const IntegerForma
 	}
 }
 
-DefinedString::DefinedString(tinyxml2::XMLElement *string): DefinedDatum(DataType::STRING){
+DefinedString::DefinedString(tinyxml2::XMLElement *string): RequireCapableDatum(DataType::STRING){
 	this->name = guaranteed_get_attribute(string, "name");
 	auto length = string->Attribute("length");
 	if (!length){
@@ -303,54 +303,6 @@ IntegerFormat::IntegerFormat(tinyxml2::XMLElement *el){
 	}
 }
 
-struct WordPair{
-	std::string first;
-	int second;
-};
-
-WordPair valid_first_line_words[] = {
-	{ "format", (int)FirstLineWord::FORMAT },
-	{ "begin",  (int)FirstLineWord::BEGIN },
-	{ "end",    (int)FirstLineWord::END },
-	{ "u8",     (int)FirstLineWord::U8 },
-	{ "u16",    (int)FirstLineWord::U16 },
-	{ "u32",    (int)FirstLineWord::U32 },
-	{ "u64",    (int)FirstLineWord::U64 },
-	{ "s8",     (int)FirstLineWord::S8 },
-	{ "s16",    (int)FirstLineWord::S16 },
-	{ "s32",    (int)FirstLineWord::S32 },
-	{ "s64",    (int)FirstLineWord::S64 },
-	{ "string", (int)FirstLineWord::STRING },
-	{ "array",  (int)FirstLineWord::ARRAY },
-	{ "struct", (int)FirstLineWord::STRUCT },
-};
-
-WordPair valid_formats[] = {
-	{ "little",        (int)FormatWord::LITTLE },
-	{ "big",           (int)FormatWord::BIG },
-	{ "twoscomp",      (int)FormatWord::TWOSCOMP },
-	{ "onescomp",      (int)FormatWord::ONESCOMP },
-	{ "signbit",       (int)FormatWord::SIGNBIT },
-	{ "excesskbiased", (int)FormatWord::EXCESSKBIASED },
-};
-
-WordPair valid_begins[] = {
-	{ "namespace", (int)BeginWord::NAMESPACE },
-	{ "type",      (int)BeginWord::TYPE },
-};
-
-WordPair valid_length_words[] = {
-	{ "fixed",  (int)LengthTypeWord::FIXED },
-	{ "seen",   (int)LengthTypeWord::SEEN },
-	{ "cstyle", (int)LengthTypeWord::CSTYLE },
-	{ "user",   (int)LengthTypeWord::USER },
-};
-
-Parser::Parser(){
-	this->init_maps();
-	this->eol_function = nullptr;
-}
-
 bool is_blank(const std::string &line){
 	if (!line.size())
 		return 1;
@@ -361,25 +313,6 @@ bool is_blank(const std::string &line){
 bool is_comment(const std::string &line){
 	auto first = line.find_first_not_of(" \t");
 	return line[first] == ';';
-}
-
-Parser::MetaParserStatus Parser::parse_specification(const char *file_path){
-	std::ifstream spec_file(file_path);
-	if (!spec_file)
-		return MetaParserStatus::FILE_NOT_FOUND;
-	while (1){
-		std::string line;
-		std::getline(spec_file, line);
-		if (!spec_file)
-			break;
-		if (is_blank(line) || is_comment(line))
-			continue;
-		std::stringstream stream(line);
-		auto status = *this <<stream;
-		if (status != Parser::MetaParserStatus::SUCCESS)
-			return status;
-	}
-	return MetaParserStatus::SUCCESS;
 }
 
 void Parser::parse(tinyxml2::XMLElement *node, ParserState &state){
@@ -431,17 +364,6 @@ Parser::MetaParserStatus Parser::load_xml(const char *file_path){
 	return MetaParserStatus::SUCCESS;
 }
 
-void Parser::init_maps(){
-	for (auto &p : valid_first_line_words)
-		this->first_line_words[p.first] = (FirstLineWord)p.second;
-	for (auto &p : valid_formats)
-		this->formats[p.first] = (FormatWord)p.second;
-	for (auto &p : valid_begins)
-		this->begins[p.first] = (BeginWord)p.second;
-	for (auto &p : valid_length_words)
-		this->length_type_words[p.first] = (LengthTypeWord)p.second;
-}
-
 Parser::MetaParserStatus Parser::pop_state(){
 	if (!this->stack.size())
 		return MetaParserStatus::EXTRANEOUS_END;
@@ -455,34 +377,6 @@ Parser::MetaParserStatus Parser::pop_state(){
 	return MetaParserStatus::SUCCESS;
 }
 
-Parser::MetaParserStatus Parser::operator<<(std::istream &stream){
-	TCO tco;
-	auto f = tco.f = &Parser::line_start;
-	MetaParserStatus ret;
-	while ((ret = (this->*f)(stream, tco)) == MetaParserStatus::CONTINUE)
-		f = tco.f;
-	if (this->eol_function && ret == MetaParserStatus::SUCCESS)
-		ret = (this->*this->eol_function)();
-	this->eol_function = nullptr;
-	return ret;
-}
-
-#define DEFINE_TCO_FUNCTION(name) Parser::MetaParserStatus Parser:: name (std::istream &stream, TCO &tco){ \
-	std::string word;                                                                                      \
-	if (!(stream >>word))                                                                                  \
-		return MetaParserStatus::SUCCESS;
-#define END_DEFINE_TCO_FUNCTION return MetaParserStatus::SYNTAX_ERROR; }
-
-#define DEFINE_TCO_FUNCTION2(name, result) Parser::MetaParserStatus Parser:: name (std::istream &stream, TCO &tco){ \
-	std::string word;                                                                                               \
-	if (!(stream >>word))                                                                                           \
-		return result;
-
-#define DEFINE_TCO_FUNCTION_REQ_ID(name) DEFINE_TCO_FUNCTION2(name, MetaParserStatus::EXPECTED_IDENTIFIER){ \
-	if (!is_valid_identifier(word))                                                                                 \
-		return MetaParserStatus::INVALID_IDENTIFIER;
-#define END_DEFINE_TCO_FUNCTION_REQ_ID }END_DEFINE_TCO_FUNCTION
-
 Parser::MetaParserStatus Parser::add_datum_to_type(){
 	if (!this->state.current_datum->validate()){
 		this->state.current_datum.reset();
@@ -492,190 +386,3 @@ Parser::MetaParserStatus Parser::add_datum_to_type(){
 	this->state.current_datum.reset();
 	return MetaParserStatus::SUCCESS;
 }
-
-#define GO_TO_STATE(x) tco.f = &Parser::x; return MetaParserStatus::CONTINUE
-
-DEFINE_TCO_FUNCTION(line_start){
-	auto i = this->first_line_words.find(word);
-	if (i == this->first_line_words.end())
-		return MetaParserStatus::SYNTAX_ERROR;
-	switch (i->second){
-		case FirstLineWord::FORMAT:
-			GO_TO_STATE(format);
-		case FirstLineWord::BEGIN:
-			this->stack.push_back(this->state);
-			GO_TO_STATE(begin);
-		case FirstLineWord::END:
-			return this->pop_state();
-		case FirstLineWord::U8:
-		case FirstLineWord::U16:
-		case FirstLineWord::U32:
-		case FirstLineWord::U64:
-		case FirstLineWord::S8:
-		case FirstLineWord::S16:
-		case FirstLineWord::S32:
-		case FirstLineWord::S64:
-			this->state.current_datum.reset(new DefinedInteger(this->state.current_format, word_is_signed_integer(i->second), bits_of_integer_in_word(i->second)));
-			this->eol_function = &Parser::add_datum_to_type;
-			GO_TO_STATE(member_name);
-		case FirstLineWord::STRING:
-			this->state.current_datum.reset(new DefinedString);
-			this->eol_function = &Parser::add_datum_to_type;
-			GO_TO_STATE(member_name);
-	}
-}END_DEFINE_TCO_FUNCTION
-
-DEFINE_TCO_FUNCTION(format){
-	auto i = this->formats.find(word);
-	if (i == this->formats.end())
-		return MetaParserStatus::SYNTAX_ERROR;
-	auto &format = this->state.current_format;
-	switch (i->second){
-		case FormatWord::LITTLE:
-			format.endianness = Endianness::LITTLE;
-			break;
-		case FormatWord::BIG:
-			format.endianness = Endianness::BIG;
-			break;
-		case FormatWord::TWOSCOMP:
-			format.negative_mapping = NegativeMapping::TWOSCOMP;
-			break;
-		case FormatWord::ONESCOMP:
-			format.negative_mapping = NegativeMapping::ONESCOMP;
-			break;
-		case FormatWord::SIGNBIT:
-			format.negative_mapping = NegativeMapping::SIGNBIT;
-			break;
-		case FormatWord::EXCESSKBIASED:
-			format.negative_mapping = NegativeMapping::EXCESSKBIASED;
-			break;
-	}
-	GO_TO_STATE(format);
-}END_DEFINE_TCO_FUNCTION
-
-DEFINE_TCO_FUNCTION(begin){
-	auto i = this->begins.find(word);
-	if (i == this->begins.end())
-		return MetaParserStatus::SYNTAX_ERROR;
-	switch (i->second){
-		case BeginWord::NAMESPACE:
-			GO_TO_STATE(namespace_name);
-		case BeginWord::TYPE:
-			GO_TO_STATE(type_name);
-	}
-}END_DEFINE_TCO_FUNCTION
-
-bool is_valid_identifier(const std::string &s){
-	if (!s.size())
-		return 0;
-	if (s[0] != '_' && !isalpha(s[0]))
-		return 0;
-	for (size_t i = 1; i < s.size(); i++)
-		if (s[i] != '_' && !isalnum(s[i]))
-			return 0;
-	return 1;
-}
-
-DEFINE_TCO_FUNCTION_REQ_ID(namespace_name){
-	this->state.current_namespace.push_back(word);
-	this->state.current_block = ParserState::BlockType::NAMESPACE;
-	return MetaParserStatus::SUCCESS;
-}END_DEFINE_TCO_FUNCTION_REQ_ID
-
-DEFINE_TCO_FUNCTION_REQ_ID(type_name){
-	auto type = new DefinedType;
-	this->state.current_type.reset(type);
-	type->set_namespace(this->state.current_namespace);
-	type->set_name(word);
-	this->state.current_block = ParserState::BlockType::TYPE;
-	return MetaParserStatus::SUCCESS;
-}END_DEFINE_TCO_FUNCTION_REQ_ID
-
-DEFINE_TCO_FUNCTION_REQ_ID(member_name){
-	this->state.current_datum->set_name(word);
-	GO_TO_STATE(member_name_done);
-}END_DEFINE_TCO_FUNCTION_REQ_ID
-
-DEFINE_TCO_FUNCTION(member_name_done){
-	if (word == "require"){
-		auto type = this->state.current_datum->get_type();
-		if (type != DataType::INTEGER && type != DataType::STRING)
-			return MetaParserStatus::REQUIRE_ONLY_FOR_SIMPLE_VALUES;
-		GO_TO_STATE(require_operator);
-	}else if (word == "length"){
-		GO_TO_STATE(length_start);
-	}
-	return MetaParserStatus::UNKNOWN_TOKEN;
-}END_DEFINE_TCO_FUNCTION
-
-DEFINE_TCO_FUNCTION2(require_operator, MetaParserStatus::EXPECTED_RELATIONAL_OPERATOR){
-	Requirement::Relation rel = Requirement::Relation::NONE;
-	if (word == "==")
-		rel = Requirement::Relation::EQ;
-	else if (word == "!=")
-		rel = Requirement::Relation::NEQ;
-	else if (word == "<=")
-		rel = Requirement::Relation::LEQ;
-	else if (word == ">=")
-		rel = Requirement::Relation::GEQ;
-	else if (word == "<")
-		rel = Requirement::Relation::LT;
-	else if (word == ">")
-		rel = Requirement::Relation::GT;
-	else
-		return MetaParserStatus::EXPECTED_RELATIONAL_OPERATOR;
-	Requirement *req = nullptr;
-	switch (this->state.current_datum->get_type()){
-		case DataType::INTEGER:
-			req = new IntegerRequirement(rel);
-			break;
-		case DataType::STRING:
-			req = new StringRequirement(rel);
-			break;
-		default:
-			assert(0);
-	}
-	this->state.current_requirement.reset(req);
-	GO_TO_STATE(require_value);
-}END_DEFINE_TCO_FUNCTION
-
-DEFINE_TCO_FUNCTION2(require_value, MetaParserStatus::EXPECTED_VALUE){
-	this->state.current_requirement->set_value(word);
-	this->state.current_datum->req = this->state.current_requirement;
-	this->state.current_requirement.reset();
-	GO_TO_STATE(member_name_done);
-}END_DEFINE_TCO_FUNCTION
-
-DEFINE_TCO_FUNCTION2(length_start, MetaParserStatus::EXPECTED_LENGTH_SPECIFICATION){
-	auto i = this->length_type_words.find(word);
-	if (i == this->length_type_words.end())
-		return MetaParserStatus::INVALID_LENGTH_SPECIFICATION;
-	switch (i->second){
-		case LengthTypeWord::FIXED:
-			this->state.current_length.reset(new FixedArrayLength);
-			GO_TO_STATE(length_value);
-		case LengthTypeWord::SEEN:
-			this->state.current_length.reset(new PrestatedArrayLength);
-			GO_TO_STATE(length_name);
-		case LengthTypeWord::CSTYLE:
-			this->state.current_datum->set_length(new CStyleArrayLength);
-			GO_TO_STATE(member_name_done);
-		case LengthTypeWord::USER:
-			this->state.current_length.reset(new UserArrayLength);
-			GO_TO_STATE(length_name);
-	}
-}END_DEFINE_TCO_FUNCTION
-
-DEFINE_TCO_FUNCTION2(length_value, MetaParserStatus::EXPECTED_LENGTH_VALUE){
-	((FixedArrayLength *)this->state.current_length.get())->length = word;
-	this->state.current_datum->set_length(this->state.current_length);
-	this->state.current_length.reset();
-	GO_TO_STATE(member_name_done);
-}END_DEFINE_TCO_FUNCTION
-
-DEFINE_TCO_FUNCTION2(length_name, MetaParserStatus::EXPECTED_LENGTH_NAME){
-	((NamedArrayLength *)this->state.current_length.get())->name = word;
-	this->state.current_datum->set_length(this->state.current_length);
-	this->state.current_length.reset();
-	GO_TO_STATE(member_name_done);
-}END_DEFINE_TCO_FUNCTION

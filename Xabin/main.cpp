@@ -30,20 +30,12 @@ the following restrictions:
 #define PROGRAM_NAME "placeholder"
 
 int main(int argc, char **argv){
-	const char *path;
-#if 0
 	if (argc < 2){
-		std::cerr <<"Usage: " PROGRAM_NAME " <specification file>\n";
+		std::cerr <<"Usage: Xabin <specification file>\n";
 		return -1;
 	}
-	path = argv[1];
-#else
-	//path = "test.txt";
-	path = "test.xml";
-#endif
 	Parser parser;
-	parser.load_xml(path);
-	parser.parse_specification(path);
+	parser.load_xml(argv[1]);
 	std::cout <<parser.generate_declarations(1);
 	std::cout <<parser.generate_definitions(1);
 	return 0;

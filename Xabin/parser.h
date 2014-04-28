@@ -44,60 +44,6 @@ const unsigned integer_size_mask = (1 << 6) - 1;
 #define UINTEGER_OF_SIZE(x) (integer_flag | (BitsToLogOfBytes<x>::value << integer_size_start))
 #define SINTEGER_OF_SIZE(x) (integer_flag | signed_integer_flag | (BitsToLogOfBytes<x>::value << integer_size_start))
 
-//Largest integers allowed by this scheme: 2^66-bit
-enum class FirstLineWord{
-	FORMAT = 0,
-	BEGIN  = 1,
-	END    = 2,
-	U8     = UINTEGER_OF_SIZE(8),
-	U16    = UINTEGER_OF_SIZE(16),
-	U32    = UINTEGER_OF_SIZE(32),
-	U64    = UINTEGER_OF_SIZE(64),
-	S8     = SINTEGER_OF_SIZE(8),
-	S16    = SINTEGER_OF_SIZE(16),
-	S32    = SINTEGER_OF_SIZE(32),
-	S64    = SINTEGER_OF_SIZE(64),
-	STRING = 3,
-	ARRAY  = 4,
-	STRUCT = 5,
-};
-
-inline bool word_is_integer(FirstLineWord word){
-	return ((unsigned)word & integer_flag) == integer_flag;
-}
-
-inline bool word_is_signed_integer(FirstLineWord word){
-	return ((unsigned)word & signed_integer_flag) == signed_integer_flag;
-}
-
-inline unsigned bits_of_integer_in_word(FirstLineWord word){
-	unsigned n = (unsigned)word;
-	n >>= integer_size_start;
-	n &= integer_size_mask;
-	return 1 << (n + 3);
-}
-
-enum class FormatWord{
-	LITTLE = 0,
-	BIG,
-	TWOSCOMP,
-	ONESCOMP,
-	SIGNBIT,
-	EXCESSKBIASED,
-};
-
-enum class BeginWord{
-	NAMESPACE = 0,
-	TYPE,
-};
-
-enum class LengthTypeWord{
-	FIXED = 0,
-	SEEN,
-	CSTYLE,
-	USER,
-};
-
 enum class Endianness{
 	LITTLE,
 	BIG,
@@ -132,7 +78,6 @@ private:
 	Relation rel;
 	std::string value;
 public:
-	Requirement(Relation rel): rel(rel){}
 	Requirement(tinyxml2::XMLElement *);
 	virtual ~Requirement(){}
 	const char *generate_relational() const{
@@ -154,9 +99,6 @@ public:
 		}
 		return 0;
 	}
-	void set_value(const std::string &s){
-		this->value = s;
-	}
 	std::string generate_code() const{
 		std::string ret;
 		ret.append(this->generate_relational());
@@ -177,14 +119,77 @@ public:
 	IntegerFormat(tinyxml2::XMLElement *);
 };
 
-class ArrayLength;
+
+class ArrayLength{
+public:
+	virtual ~ArrayLength(){}
+	virtual const char *get_length_word() const = 0;
+	virtual std::string generate_length_parameter() const = 0;
+};
+
+class FixedArrayLength : public ArrayLength{
+public:
+	std::string length;
+	FixedArrayLength(const std::string &length): length(length){}
+	const char *get_length_word() const{
+		return "sized";
+	}
+	std::string generate_length_parameter() const{
+		std::string ret(", ");
+		ret.append(this->length);
+		return ret;
+	}
+};
+
+class CStyleArrayLength: public ArrayLength{
+public:
+	const char *get_length_word() const{
+		return "cstyle";
+	}
+	std::string generate_length_parameter() const{
+		return std::string();
+	}
+};
+
+class NamedArrayLength : public ArrayLength{
+public:
+	NamedArrayLength(){}
+	NamedArrayLength(const std::string &name): name(name){}
+	std::string name;
+	virtual ~NamedArrayLength(){}
+};
+
+class PrestatedArrayLength : public NamedArrayLength{
+public:
+	PrestatedArrayLength(const std::string &name): NamedArrayLength(name){}
+	const char *get_length_word() const{
+		return "sized";
+	}
+	std::string generate_length_parameter() const{
+		std::string ret(", ");
+		ret.append(this->name);
+		return ret;
+	}
+};
+
+class UserArrayLength : public NamedArrayLength{
+public:
+	UserArrayLength(const std::string &name): NamedArrayLength(name){}
+	const char *get_length_word() const{
+		return "user_length";
+	}
+	std::string generate_length_parameter() const{
+		std::string ret(", ");
+		ret.append(this->name);
+		return ret;
+	}
+};
 
 class DefinedDatum{
 protected:
 	DataType type;
 	std::string name;
 public:
-	boost::shared_ptr<Requirement> req;
 	DefinedDatum(DataType type): type(type){}
 	virtual ~DefinedDatum(){}
 	DataType get_type() const{
@@ -199,10 +204,18 @@ public:
 	const std::string &get_name() const{
 		return this->name;
 	}
-	void set_name(const std::string &name){
-		this->name = name;
+	virtual std::string generate_requirement_code(bool use_exceptions) const{
+		return std::string();
 	}
 	virtual std::string generate_read_code(bool use_exceptions) const = 0;
+};
+
+class RequireCapableDatum : public DefinedDatum{
+protected:
+	boost::shared_ptr<Requirement> req;
+public:
+	RequireCapableDatum(DataType type): DefinedDatum(type){}
+	virtual ~RequireCapableDatum(){}
 	std::string generate_requirement_code(bool use_exceptions) const;
 };
 
@@ -211,12 +224,11 @@ struct IntegerType{
 	unsigned bitness;
 };
 
-class DefinedInteger : public DefinedDatum{
+class DefinedInteger : public RequireCapableDatum{
 	IntegerFormat format;
 	bool signedness;
 	unsigned size;
 public:
-	DefinedInteger(IntegerFormat &format, bool signedness, unsigned bitness): DefinedDatum(DataType::INTEGER), format(format), signedness(signedness), size(bitness / 8){}
 	DefinedInteger(tinyxml2::XMLElement *, const IntegerFormat &format, const IntegerType &);
 	unsigned get_size() const{
 		return this->size;
@@ -280,82 +292,10 @@ public:
 	std::string generate_read_code(bool use_exceptions) const;
 };
 
-class ArrayLength{
-public:
-	virtual ~ArrayLength(){}
-	virtual const char *get_length_word() const = 0;
-	virtual std::string generate_length_parameter() const = 0;
-};
-
-class FixedArrayLength : public ArrayLength{
-public:
-	std::string length;
-	FixedArrayLength(){}
-	FixedArrayLength(const std::string &length): length(length){}
-	const char *get_length_word() const{
-		return "sized";
-	}
-	std::string generate_length_parameter() const{
-		std::string ret(", ");
-		ret.append(this->length);
-		return ret;
-	}
-};
-
-class CStyleArrayLength: public ArrayLength{
-public:
-	const char *get_length_word() const{
-		return "cstyle";
-	}
-	std::string generate_length_parameter() const{
-		return std::string();
-	}
-};
-
-class NamedArrayLength : public ArrayLength{
-public:
-	NamedArrayLength(){}
-	NamedArrayLength(const std::string &name): name(name){}
-	std::string name;
-	virtual ~NamedArrayLength(){}
-};
-
-class PrestatedArrayLength : public NamedArrayLength{
-public:
-	PrestatedArrayLength(){}
-	PrestatedArrayLength(const std::string &name): NamedArrayLength(name){}
-	const char *get_length_word() const{
-		return "sized";
-	}
-	std::string generate_length_parameter() const{
-		std::string ret(", ");
-		ret.append(this->name);
-		return ret;
-	}
-};
-
-class UserArrayLength : public NamedArrayLength{
-public:
-	UserArrayLength(){}
-	UserArrayLength(const std::string &name): NamedArrayLength(name){}
-	const char *get_length_word() const{
-		return "user_length";
-	}
-	std::string generate_length_parameter() const{
-		std::string ret(", ");
-		ret.append(this->name);
-		return ret;
-	}
-};
-
-class DefinedString : public DefinedDatum{
+class DefinedString : public RequireCapableDatum{
 	boost::shared_ptr<ArrayLength> length;
 public:
-	DefinedString(): DefinedDatum(DataType::STRING){}
 	DefinedString(tinyxml2::XMLElement *);
-	bool validate(){
-		return !!this->length.get();
-	}
 	void set_length(ArrayLength *length){
 		this->length.reset(length);
 	}
@@ -373,18 +313,7 @@ class DefinedArray : public DefinedDatum{
 	boost::shared_ptr<ArrayLength> length;
 public:
 	DefinedArray(tinyxml2::XMLElement *);
-	bool validate(){
-		return !!this->length.get();
-	}
-	void set_length(ArrayLength *length){
-		this->length.reset(length);
-	}
-	void set_length(boost::shared_ptr<ArrayLength> &length){
-		this->length = length;
-	}
-	std::string get_signature() const{
-		return "std::string " + this->name;
-	}
+	std::string get_signature() const;
 	std::string generate_read_code(bool use_exceptions) const;
 };
 
@@ -465,34 +394,13 @@ private:
 	};
 	typedef MetaParserStatus (Parser::*end_of_line_function)();
 
-	std::map<std::string, FirstLineWord> first_line_words;
-	std::map<std::string, FormatWord> formats;
-	std::map<std::string, BeginWord> begins;
-	std::map<std::string, LengthTypeWord> length_type_words;
-	void init_maps();
 	MetaParserStatus pop_state();
 	end_of_line_function eol_function;
 
 	MetaParserStatus add_datum_to_type();
 
-#define DECLARE_STATE(name) MetaParserStatus name(std::istream &stream, TCO &tco)
-	DECLARE_STATE(line_start);
-	DECLARE_STATE(format);
-	DECLARE_STATE(begin);
-	DECLARE_STATE(end);
-	DECLARE_STATE(member_name);
-	DECLARE_STATE(namespace_name);
-	DECLARE_STATE(type_name);
-	DECLARE_STATE(member_name_done);
-	DECLARE_STATE(require_operator);
-	DECLARE_STATE(require_value);
-	DECLARE_STATE(length_start);
-	DECLARE_STATE(length_value);
-	DECLARE_STATE(length_name);
-
 	void parse(tinyxml2::XMLElement *, ParserState &);
 public:
-	Parser();
 	MetaParserStatus operator<<(std::istream &stream);
 	std::string generate_declarations(bool use_exceptions) const{
 		std::string ret;
@@ -510,6 +418,5 @@ public:
 		}
 		return ret;
 	}
-	MetaParserStatus parse_specification(const char *file_path);
 	Parser::MetaParserStatus load_xml(const char *file_path);
 };
